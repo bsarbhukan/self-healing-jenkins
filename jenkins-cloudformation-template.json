@@ -1,0 +1,649 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "This creates launch configuration for jenkins master machine using user data and encrypted EBS volume is attached to it",
+  "Parameters": {
+    "MyServiceVPC": {
+      "Description": "VPC with some useful service tools",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "KeyNameTest": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "must be the name of an existing EC2 KeyPair.",
+      "MinLength": "1"
+    },
+    "InstanceType": {
+      "Description": "EC2 instance type",
+      "Type": "String",
+      "Default": "t2.medium",
+      "AllowedValues": [
+        "t2.nano",
+        "t2.micro",
+        "t2.small",
+        "t2.medium",
+        "t2.large",
+        "t2.xlarge",
+        "t2.2xlarge",
+        "m4.large",
+        "m4.xlarge",
+        "m4.2xlarge",
+        "m4.4xlarge",
+        "m4.10xlarge",
+        "m4.16xlarge",
+        "m3.medium",
+        "m3.large",
+        "m3.xlarge",
+        "m3.2xlarge",
+        "c4.large",
+        "c4.xlarge",
+        "c4.2xlarge",
+        "c4.4xlarge",
+        "c4.8xlarge",
+        "c3.large",
+        "c3.xlarge",
+        "c3.2xlarge",
+        "c3.4xlarge",
+        "c3.8xlarge",
+        "x1.32xlarge",
+        "x1.16xlarge",
+        "r4.large",
+        "r4.xlarge",
+        "r4.2xlarge",
+        "r4.4xlarge",
+        "r4.8xlarge",
+        "r4.16xlarge",
+        "r3.large",
+        "r3.xlarge",
+        "r3.2xlarge",
+        "r3.4xlarge",
+        "r3.8xlarge",
+        "i3.large",
+        "i3.xlarge",
+        "i3.2xlarge",
+        "i3.4xlarge",
+        "i3.8xlarge",
+        "i3.16xlarge",
+        "d2.xlarge",
+        "d2.2xlarge",
+        "d2.4xlarge",
+        "d2.8xlarge"
+      ],
+      "ConstraintDescription": "must be a valid EC2 instance type."
+    },
+    "AMI": {
+      "Description": "AMI reference for ubuntu AMI id",
+      "Type": "AWS::EC2::Image::Id"
+    },
+    "ELBSecurityGroup": {
+      "Description": "Access to ELBs from port 443 vpn address range",
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "SSHSGFromJmpHost": {
+      "Description": "Allow SSH connection from jumpbox server",
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "Subnetpri1b": {
+      "Description": "Private subnet",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "Subnetpub1b": {
+      "Description": "Public subnet",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "ENV": {
+      "Description": "Environment name",
+      "Type": "String"
+    },
+    "ACMIdentifier": {
+      "Description": "Identifier of ACM certificate which will be used for LB",
+      "Type": "String"
+    },
+    "EBSVolumeID": {
+      "Default": "create",
+      "Description": "'create', or an existing EBS volume ID to use instead of creating a new one.",
+      "AllowedPattern": "(create|vol-[a-z0-9]+)",
+      "Type": "String"
+    },
+    "EBSVolumeSize": {
+      "Default": "120",
+      "Description": "The size of the EBS volume to create (in GB), if EBSVolumeID is set to 'create'.",
+      "AllowedPattern": "[0-9]+",
+      "Type": "String"
+    },
+    "AvailabilityZone": {
+      "Description": "Availability Zone.",
+      "Type": "AWS::EC2::AvailabilityZone::Name"
+    },
+    "RegionPrefix": {
+      "Description": "AWS region. e.g. dub for dublin, ore for oregon",
+      "Type": "String",
+      "Default": "dub"
+    },
+    "HostedZoneId": {
+      "Description": "HostedZone for the Domain you would like to use",
+      "Type": "String"
+    },
+    "DnsZone": {
+      "Description": "Used DNSZone",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "JenkinsSg": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jen-sg"]]},
+        "VpcId": {"Ref": "MyServiceVPC"},
+        "GroupDescription": "This security group allows access on port 8080 for jenkins elb. Using sg as inbound rules and all ports opened as outbound",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "TCP",
+            "FromPort": "8080",
+            "ToPort": "8080",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
+        "SecurityGroupEgress": {
+          "IpProtocol": "-1",
+          "FromPort": "-1",
+          "ToPort": "-1",
+          "CidrIp": "0.0.0.0/0"
+        },
+        "Tags": [{"Key": "Name", "Value": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jen-sg"]]}}]
+      }
+    },
+    "JenkinsSlaveSg": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupName": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jenkinsSlave-sg"]]},
+        "VpcId": {"Ref": "MyServiceVPC"},
+        "GroupDescription": "This security group allows access from jenkins master to jenkins slave and also jenkins slave accessible from jump host",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "TCP",
+            "FromPort": "22",
+            "ToPort": "22",
+            "SourceSecurityGroupId": {"Ref": "SSHSGFromJmpHost"}
+          }
+        ],
+        "SecurityGroupEgress": {
+          "IpProtocol": "-1",
+          "FromPort": "-1",
+          "ToPort": "-1",
+          "CidrIp": "0.0.0.0/0"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jenkinsSlave-sg"]]}
+          }
+        ]
+      }
+    },
+    "JenkinsExtElb": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "SecurityGroups": [
+          {
+            "Ref": "ELBSecurityGroup"
+          }
+        ],
+        "Subnets": [{"Ref": "Subnetpub1b"}
+        ],
+        "Scheme": "internet-facing",
+        "LoadBalancerName": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jenkins-ext-elb"]]},
+        "Listeners": [
+          {
+            "LoadBalancerPort": "443",
+            "Protocol": "HTTPS",
+            "InstancePort": "8080",
+            "SSLCertificateId": {"Fn::Join": ["", ["arn:aws:acm:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":certificate/", {"Ref": "ACMIdentifier"}]]}
+          }
+        ],
+        "HealthCheck": {
+          "HealthyThreshold": "2",
+          "Interval": "30",
+          "Target": "TCP:8080",
+          "Timeout": "5",
+          "UnhealthyThreshold": "2"
+        },
+        "CrossZone": "true"
+      }
+    },
+    "JenkinsS3Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "AccessControl": "Private",
+        "BucketName": {"Fn::Join": ["", [{"Ref":"RegionPrefix"}, "-", {"Ref": "ENV"}, "-jenkins-backup"]]}
+      }
+    },
+    "JenkinsIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"Service": ["ec2.amazonaws.com"]},
+              "Action": ["sts:AssumeRole"]
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser",
+          "arn:aws:iam::aws:policy/AWSCodePipelineCustomActionAccess",
+          {"Ref": "WriteToS3Policy"},
+          {"Ref": "PassRolePolicy"},
+          {"Ref": "EC2AccessPolicy"},
+          {"Ref": "AttachEBSVolToInstancePolicy"}
+        ],
+        "RoleName": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jen-role"]]}
+      }
+    },
+    "WriteToS3Policy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "This policy allows jenkins master to write backup to S3 bucket",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:ListBucket"],
+              "Resource": [{"Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "JenkinsS3Bucket"}]]}]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Resource": [{"Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "JenkinsS3Bucket"},"/*"]]}]
+            }
+          ]
+        }
+      }
+    },
+    "PassRolePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "This policy allows jenkins master to pass the IAM Role to jenkins slave",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "iam:PassRole"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    },
+    "EC2AccessPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "This policy allows Jenkins master to do some ec2 operations in order to spin up slave machine",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ec2:DescribeSpotInstanceRequests",
+                "ec2:CancelSpotInstanceRequests",
+                "ec2:GetConsoleOutput",
+                "ec2:RequestSpotInstances",
+                "ec2:RunInstances",
+                "ec2:StartInstances",
+                "ec2:StopInstances",
+                "ec2:CreateTags",
+                "ec2:DescribeInstances",
+                "ec2:DescribeKeyPairs",
+                "ec2:DescribeRegions",
+                "ec2:DescribeImages",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeSubnets",
+                "ec2:ImportInstance",
+                "ec2:RunScheduledInstances",
+                "ec2:DescribeHosts",
+                "ec2:DescribeImages",
+                "ec2:DescribeAvailabilityZones",
+                "ec2:DescribeSecurityGroupReferences",
+                "ec2:DescribeVolumes",
+                "ec2:AllocateHosts",
+                "ec2:DescribeInstanceStatus",
+                "ec2:ModifyInstanceAttribute"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    },
+    "AttachEBSVolToInstancePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "This policy allows to attach EBS volume to EC2 instance",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Resource": {"Fn::Join": ["", ["arn:aws:ec2:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":instance/*"]]},
+              "Action": [
+                "ec2:AttachVolume",
+                "ec2:DetachVolume"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Resource": {"Fn::Join": ["", ["arn:aws:ec2:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":volume/",
+                {"Fn::If": ["CreateEBSVolume", {"Ref": "EBSSSDVolume"}, {"Ref": "EBSVolumeID"}]}]]},
+              "Action": [
+                "ec2:AttachVolume",
+                "ec2:DetachVolume"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "CheckVolumeStatusWhileAttaching",
+              "Action": "ec2:DescribeVolumes"
+            }
+          ]
+        }
+      }
+    },
+    "JenkinsInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [{"Ref": "JenkinsIAMRole"}],
+        "InstanceProfileName": {"Fn::Join": ["", [{"Ref": "ENV"}, "-JenkinsAccess"]]}
+      }
+    },
+    "JenkinsAutoScalingGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "LaunchConfigurationName": {"Ref": "JenkinsLaunchConfig"},
+        "Tags": [{"Key": "Name", "Value": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jenkins-master"]]}, "PropagateAtLaunch": "true"}],
+        "MinSize": "1",
+        "MaxSize": "2",
+        "DesiredCapacity": "1",
+        "LoadBalancerNames": [{"Ref": "JenkinsExtElb"}],
+        "VPCZoneIdentifier": [{"Ref": "Subnetpri1b"}]
+      }
+    },
+    "JenkinsLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "AssociatePublicIpAddress": "false",
+        "EbsOptimized": false,
+        "IamInstanceProfile": {"Ref": "JenkinsInstanceProfile"},
+        "ImageId": {"Ref": "AMI"},
+        "InstanceType": {"Ref": "InstanceType"},
+        "KeyName": {"Ref": "KeyNameTest"},
+        "SecurityGroups": [
+          {"Ref": "SSHSGFromJmpHost"},
+          {"Ref": "JenkinsSg"}
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash -xe\n",
+                "\n",
+                "USER=\"ubuntu\"\n",
+                "",
+                "# The docker file\n",
+                "cat <<-EOF >/home/ubuntu/Dockerfile\n",
+                "FROM jenkins/jenkins:2.73.1\n",
+                "",
+                "ENV JENKINS_REF /usr/share/jenkins/ref\n",
+                "\n",
+                "# Install useful software.\n",
+                "USER root\n",
+                "RUN apt-get update && apt-get install -y duplicity python-boto git-review jq && rm -rf /var/lib/apt/lists/*\n",
+                "RUN curl \"https://s3.amazonaws.com/aws-cli/awscli-bundle.zip\" -o \"awscli-bundle.zip\" && unzip awscli-bundle.zip && ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws && rm awscli-bundle.zip\n",
+                "\n",
+                "USER jenkins\n",
+                "RUN mkdir -p \\$JENKINS_REF\n",
+                "# Install plugins.\n",
+                "ADD plugins.txt \\$JENKINS_REF\n",
+                "RUN /usr/local/bin/install-plugins.sh < \\$JENKINS_REF/plugins.txt\n",
+                "EOF\n",
+                "\n",
+                "EBS_VOLUME_ID=",
+                {
+                  "Fn::If": [
+                    "CreateEBSVolume",
+                    {
+                      "Ref": "EBSSSDVolume"
+                    },
+                    {
+                      "Ref": "EBSVolumeID"
+                    }
+                  ]
+                },
+                "\n",
+                "EBS_VOLUME_DEVICE=\"/dev/xvdh\"\n",
+                "MOUNT_POINT=\"/mnt_jenkins\"\n",
+                "INSTANCE_ID=$(ec2metadata --instance-id)\n",
+                "sudo apt-get update\n",
+                "sudo apt-get install -qy python-pip python-dev build-essential jq\n",
+                "sudo pip install --upgrade pip \n",
+                "sudo pip install --upgrade awscli\n",
+                "echo \"Attaching EBS volume ${EBS_VOLUME_ID} to device ${EBS_VOLUME_DEVICE} on instance ${INSTANCE_ID}\"\n",
+                "aws --region ",{"Ref": "AWS::Region"}," ec2 attach-volume --volume-id ${EBS_VOLUME_ID} --instance-id ${INSTANCE_ID} --device ${EBS_VOLUME_DEVICE}\n",
+                "echo \"Waiting for attach to complete...\"\n",
+                "let RETRIES_LEFT=60\n",
+                "while [[ \"$RETRIES_LEFT\" -gt \"0\" ]]; do\n",
+                "    sleep 1s\n",
+                "	   ATTACH_STATUS=$(aws --region ",{"Ref": "AWS::Region"}," ec2 describe-volumes --volume-ids ${EBS_VOLUME_ID} | jq .Volumes[0].Attachments[0].State)\n",
+                "	   if [ \"${ATTACH_STATUS}\" == '\"attached\"' ]; then\n",
+                "        echo \"Attach completed.\"\n",
+                "        break \n",
+                "    fi\n",
+                "    echo \"Current status: ${ATTACH_STATUS}.\"\n",
+                "    let \"RETRIES_LEFT=RETRIES_LEFT-1\"\n",
+                "done\n",
+                "set +e\n",
+                "sudo file -s ${EBS_VOLUME_DEVICE} | cut -d , -f1 | grep -q \"ext4\"\n",
+                "if [ $? -eq 0 ]; then\n",
+                "    echo \"Already data in the EBS volume ...\"\n",
+                "else\n",
+                "    sudo mkfs -t ext4 ${EBS_VOLUME_DEVICE}\n",
+                "fi\n",
+                "set -e\n",
+                "sudo mkdir ${MOUNT_POINT}\n",
+                "sudo mount ${EBS_VOLUME_DEVICE} ${MOUNT_POINT}\n",
+                "\n",
+                "# The plugins.txt file\n",
+                "cat <<-EOF >/home/ubuntu/plugins.txt\n",
+                "structs:1.10\n",
+                "workflow-aggregator:2.5\n",
+                "antisamy-markup-formatter:1.5\n",
+                "maven-plugin:2.17\n",
+                "handlebars:1.1.1\n",
+                "workflow-cps-global-lib:2.9\n",
+                "mapdb-api:1.0.9.0\n",
+                "pipeline-milestone-step:1.3.1\n",
+                "workflow-scm-step:2.6\n",
+                "timestamper:1.8.8\n",
+                "ant:1.7\n",
+                "workflow-multibranch:2.16\n",
+                "workflow-basic-steps:2.6\n",
+                "workflow-api:2.20\n",
+                "ace-editor:1.1\n",
+                "branch-api:2.0.11\n",
+                "plain-credentials:1.4\n",
+                "resource-disposer:0.8\n",
+                "pipeline-model-api:1.2\n",
+                "pipeline-stage-step:2.2\n",
+                "matrix-auth:1.7\n",
+                "git:3.5.1\n",
+                "ssh-credentials:1.13\n",
+                "pipeline-model-extensions:1.2\n",
+                "workflow-cps:2.40\n",
+                "durable-task:1.14\n",
+                "credentials:2.1.16\n",
+                "mailer:1.20\n",
+                "git-client:2.5.0\n",
+                "workflow-job:2.14.1\n",
+                "momentjs:1.1.1\n",
+                "email-ext:2.60\n",
+                "display-url-api:2.0\n",
+                "pipeline-input-step:2.8\n",
+                "ws-cleanup:0.34\n",
+                "authentication-tokens:1.3\n",
+                "bouncycastle-api:2.16.2\n",
+                "cloudbees-folder:6.1.2\n",
+                "token-macro:2.3\n",
+                "pipeline-stage-tags-metadata:1.2\n",
+                "docker-commons:1.8\n",
+                "workflow-support:2.14\n",
+                "ssh-slaves:1.21\n",
+                "gerrit-trigger:2.26.0\n",
+                "scm-api:2.2.2\n",
+                "gradle:1.27.1\n",
+                "workflow-durable-task-step:2.15\n",
+                "icon-shim:2.0.3\n",
+                "build-timeout:1.18\n",
+                "external-monitor-job:1.7\n",
+                "matrix-project:1.11\n",
+                "pam-auth:1.3\n",
+                "javadoc:1.4\n",
+                "pipeline-model-definition:1.2\n",
+                "pipeline-build-step:2.5.1\n",
+                "junit:1.21\n",
+                "jquery-detached:1.2.1\n",
+                "script-security:1.34\n",
+                "pipeline-stage-view:2.9\n",
+                "docker-workflow:1.13\n",
+                "credentials-binding:1.13\n",
+                "pipeline-model-declarative-agent:1.1.1\n",
+                "pipeline-graph-analysis:1.5\n",
+                "git-server:1.7\n",
+                "pipeline-rest-api:2.9\n",
+                "ldap:1.17\n",
+                "workflow-step-api:2.13\n",
+                "job-dsl:1.65\n",
+                "envinject:2.1.3\n",
+                "packer:1.4\n",
+                "jenkins-jira-issue-updater:1.18\n",
+                "jenkins-cloudformation-plugin:1.2\n",
+                "build-user-vars-plugin:1.5\n",
+                "any-buildstep:0.1\n",
+                "checkstyle:3.49\n",
+                "findbugs:4.71\n",
+                "pmd:3.49\n",
+                "warnings:4.63\n",
+                "analysis-collector:1.52\n",
+                "violations:0.7.11\n",
+                "jacoco:2.2.1\n",
+                "clone-workspace-scm:0.6\n",
+                "htmlpublisher:1.14\n",
+                "ssh-agent:1.15\n",
+                "perfpublisher:8.05\n",
+                "performance:3.3\n",
+                "copyartifact:1.38.1\n",
+                "ec2:1.37\n",
+                "aws-java-sdk:1.11.119\n",
+                "build-monitor-plugin:1.12+build.201704111018\n",
+                "aws-credentials:1.22\n",
+                "conditional-buildstep:1.3.6\n",
+                "analysis-core:1.92\n",
+                "run-condition:1.0\n",
+                "flexible-publish:0.15.2\n",
+                "node-iterator-api:1.5\n",
+                "jquery:1.11.2-1\n",
+                "jackson2-api:2.7.3\n",
+                "role-strategy:2.6.0\n",
+                "postbuild-task:1.8\n",
+                "m2release:0.14.0\n",
+                "rebuild:1.25\n",
+                "ansicolor:0.5.2\n",
+                "greenballs:1.15\n",
+                "port-allocator:1.8\n",
+                "environment-script:1.2.5\n",
+                "xunit:1.102\n",
+                "p4:1.7.5\n",
+                "gatling:1.2.2\n",
+                "multiple-scms:0.6\n",
+                "date-parameter:0.0.2\n",
+                "aws-codepipeline:0.33\n",
+                "docker-build-publish:1.3.2\n",
+                "docker-plugin:1.0.4\n",
+                "docker-java-api:3.0.14\n",
+                "file-operations:1.7\n",
+                "splunk-devops:1.6.4\n",
+                "active-directory:2.6\n",
+                "EOF\n",
+                "\n",
+                "sudo apt-get update\n",
+                "sudo apt-get install -qy python-pip apt-transport-https curl ca-certificates software-properties-common\n",
+                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -\n",
+                "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\"\n",
+                "sudo apt-get update\n",
+                "sudo apt-get install -qy docker-ce\n",
+                "sudo usermod -aG docker $USER\n",
+                "\n",
+                "sudo docker build -t jenkins_custom_made:v1 /home/ubuntu\n",
+                "\n",
+                "sudo mkdir -p ${MOUNT_POINT}/jenkins_home\n",
+                "sudo chown ubuntu:ubuntu ${MOUNT_POINT}/jenkins_home\n",
+                "sudo docker run --restart=always -d -p 8080:8080 -p 50000:50000 -v ${MOUNT_POINT}/jenkins_home:/var/jenkins_home --name=jenkins jenkins_custom_made:v1\n",
+                "sudo add-apt-repository -y ppa:duplicity-team/ppa\n",
+                "sudo apt-get update\n",
+                "sudo apt-get --assume-yes install duplicity\n",
+                "sudo apt-get --assume-yes install python-boto\n"
+              ]
+            ]
+          }
+        }
+      },
+      "JenkinsDns": {
+        "Type": "AWS::Route53::RecordSet",
+        "Properties": {
+          "HostedZoneId": {
+            "Ref": "HostedZoneId"
+          },
+          "Name": {"Fn::Join": ["", ["test-jenkins.", {"Ref": "DnsZone"}, "."]]},
+          "Comment": "DNS name for Jenkins",
+          "Type": "CNAME",
+          "TTL": "300",
+          "ResourceRecords": [{"Ref": "JenkinsExtElb"}]
+        }
+      }
+    },
+    "EBSSSDVolume": {
+      "Type": "AWS::EC2::Volume",
+      "Properties": {
+        "VolumeType": "gp2",
+        "Encrypted": true,
+        "Size": {"Ref": "EBSVolumeSize"},
+        "AvailabilityZone": {"Ref": "AvailabilityZone"},
+        "Tags": [{"Key": "Name", "Value": {"Fn::Join": ["", [{"Ref": "ENV"}, "-jenkins-volume"]]}}]},
+      "Condition": "CreateEBSVolume"
+    }
+  },
+  "Conditions": {
+    "CreateEBSVolume": {"Fn::Equals": [{"Ref": "EBSVolumeID"}, "create"]}
+  },
+  "Outputs": {
+    "JenkinsAutoScalingGroup" : {
+      "Description": "The Jenkins Autoscaling GroupName",
+      "Value" : { "Ref" : "JenkinsAutoScalingGroup" }
+    },
+    "JenkinsDns": {
+      "Description": "jenkins dns name",
+      "Value": { "Ref": "JenkinsDns" },
+      "Export" : {"Name" : {"Fn::Sub": "${AWS::StackName}-JenkinsDns" }}
+    }
+  }
+}
