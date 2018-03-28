@@ -5,7 +5,7 @@
 # You should have working management VPC and subnet which can be passed as parameter in order to create jenkins master machine
 # You should own valid domain name
 
-Required parameters
+#Required parameters
 # Provide below parameters in jenkins-cloudformation-template.json
 * AvailabilityZone - Availability Zone
   Example: eu-west-1b
